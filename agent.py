@@ -40,10 +40,24 @@ tools = [
         }
     }
 ]
-
-# --- Étape 2 : la vraie fonction Python derrière l'outil (données factices pour l'instant) ---
 def search_destinations(budget, num_travelers, preferences=None):
-    return f"Sample results for budget=${budget}, {num_travelers} travelers, preferences={preferences}: 1) Lisbon, Portugal (~$1200/person, great for city+culture lovers) 2) Bali, Indonesia (~$1500/person, great for beach+nature)"
+    search_prompt = (
+        f"Search the web for current vacation destination ideas suitable for "
+        f"{num_travelers} travelers with a total budget of ${budget}"
+        + (f", focused on {preferences} trips." if preferences else ".")
+        + " Give a short list (2-3 destinations) with an approximate cost per person "
+        "and one sentence explaining why each fits."
+    )
+       
+
+    sub_response = client.messages.create(
+        model="claude-sonnet-5",
+        max_tokens=1000,
+        tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        messages=[{"role": "user", "content": search_prompt}]
+    )
+    text_parts = [block.text for block in sub_response.content if block.type == "text"]
+    return "\n".join(text_parts)
 
 # --- Étape 3 : envoyer la première requête avec les outils disponibles ---
 messages = [
