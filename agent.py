@@ -6,7 +6,7 @@ load_dotenv()
 
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-# --- Étape 1 : définir l'outil ---
+# --- Définition des outils ---
 tools = [
     {
         "name": "search_destinations",
@@ -23,23 +23,38 @@ tools = [
         "input_schema": {
             "type": "object",
             "properties": {
-                "budget": {
-                    "type": "number",
-                    "description": "Total trip budget in USD."
-                },
-                "num_travelers": {
-                    "type": "integer",
-                    "description": "Number of people traveling together."
-                },
-                "preferences": {
-                    "type": "string",
-                    "description": "Type of trip desired, e.g. 'beach', 'city', 'mountains', 'culture'."
-                }
+                "budget": {"type": "number", "description": "Total trip budget in USD."},
+                "num_travelers": {"type": "integer", "description": "Number of people traveling together."},
+                "preferences": {"type": "string", "description": "Type of trip desired, e.g. 'beach', 'city', 'mountains', 'culture'."}
             },
             "required": ["budget", "num_travelers"]
         }
+    },
+    {
+        "name": "search_activities",
+        "description": (
+            "Search for activities that travelers can do at their vacation destination, "
+            "to maximize their enjoyment during the trip. Use this tool once a destination "
+            "has already been chosen, and only if the travelers seem interested in activities "
+            "and the budget allows for it. Do not use this tool if the travelers only want "
+            "flights/hotels or haven't decided on a destination yet. "
+            "Returns a list of suggested activities, each with the activity name, "
+            "recommended age range, a short description, its theme (relaxation, adventure, "
+            "sports, culture, etc.), and an estimated price."
+        ),
+        "input_schema": {
+            "type": "object",
+            "properties": {
+                "destination": {"type": "string", "description": "The travelers' vacation destination."},
+                "num_travelers": {"type": "integer", "description": "Number of people traveling together."},
+                "trip_duration_days": {"type": "integer", "description": "Length of the trip in days."}
+            },
+            "required": ["destination", "num_travelers"]
+        }
     }
 ]
+
+# --- Fonctions Python derrière chaque outil ---
 def search_destinations(budget, num_travelers, preferences=None):
     search_prompt = (
         f"Search the web for current vacation destination ideas suitable for "
@@ -48,8 +63,6 @@ def search_destinations(budget, num_travelers, preferences=None):
         + " Give a short list (2-3 destinations) with an approximate cost per person "
         "and one sentence explaining why each fits."
     )
-       
-
     sub_response = client.messages.create(
         model="claude-sonnet-5",
         max_tokens=1000,
@@ -59,24 +72,28 @@ def search_destinations(budget, num_travelers, preferences=None):
     text_parts = [block.text for block in sub_response.content if block.type == "text"]
     return "\n".join(text_parts)
 
-# --- Étape 3 : envoyer la première requête avec les outils disponibles ---
-messages = [
-    {"role": "user", "content": "I have a budget of $3000 for 2 people, we love beaches. Where should we go?"}
-]
 
-response = client.messages.create(
-    model="claude-sonnet-5",
-    max_tokens=1000,
-    tools=tools,
-    messages=messages
-)
+def search_activities(destination, num_travelers, trip_duration_days=None):
+    search_prompt = (
+        f"Search the web for current activity ideas suitable for "
+        f"{num_travelers} travelers in this destination: {destination}."
+        + (f" The trip lasts {trip_duration_days} days." if trip_duration_days else "")
+        + " Give a short list (2-3 activities) with an approximate cost per person "
+        "and one sentence explaining why each fits."
+    )
+    sub_response = client.messages.create(
+        model="claude-sonnet-5",
+        max_tokens=1000,
+        tools=[{"type": "web_search_20250305", "name": "web_search"}],
+        messages=[{"role": "user", "content": search_prompt}]
+    )
+    text_parts = [block.text for block in sub_response.content if block.type == "text"]
+    return "\n".join(text_parts)
 
-print("--- First response from Claude ---")
-print(response.content)
-print("Stop reason:", response.stop_reason)
-# --- Étape 3 : premier appel avec les outils disponibles ---
+
+# --- Boucle agentique principale ---
 messages = [
-    {"role": "user", "content": "I have a budget of $3000 for 2 people, we love beaches. Where should we go?"}
+    {"role": "user", "content": "We're going to Cancun for 5 days with 2 people, budget $3000. Suggest some activities for us."}
 ]
 
 response = client.messages.create(
@@ -90,10 +107,8 @@ print("--- First response ---")
 print(response.content)
 print("Stop reason:", response.stop_reason)
 
-# --- Étape 4 : ajouter la réponse de Claude à l'historique de conversation ---
 messages.append({"role": "assistant", "content": response.content})
 
-# --- Étape 5 : si Claude a demandé un outil, l'exécuter et boucler ---
 if response.stop_reason == "tool_use":
     tool_results = []
 
@@ -101,17 +116,17 @@ if response.stop_reason == "tool_use":
         if block.type == "tool_use":
             if block.name == "search_destinations":
                 result = search_destinations(**block.input)
+            elif block.name == "search_activities":
+                result = search_activities(**block.input)
 
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": result
-                })
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": result
+            })
 
-    # On renvoie les résultats des outils comme un nouveau message "user"
     messages.append({"role": "user", "content": tool_results})
 
-    # Deuxième appel : Claude reçoit le résultat et formule sa vraie réponse
     final_response = client.messages.create(
         model="claude-sonnet-5",
         max_tokens=1000,
