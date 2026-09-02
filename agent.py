@@ -2,12 +2,14 @@ import os
 from dotenv import load_dotenv
 import anthropic
 
-load_dotenv()
+load_dotenv()  # Load environment variables from the .env file
 
+# Create the Anthropic client using the API key stored in the environment variable
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
-# --- Définition des outils ---
+# --- Definition of the tools ---
 tools = [
+    # Tool 1: search_destinations
     {
         "name": "search_destinations",
         "description": (
@@ -30,6 +32,7 @@ tools = [
             "required": ["budget", "num_travelers"]
         }
     },
+    # Tool 2: search_activities
     {
         "name": "search_activities",
         "description": (
@@ -54,8 +57,12 @@ tools = [
     }
 ]
 
-# --- Fonctions Python derrière chaque outil ---
+
+# --- Python functions behind each tool ---
+
 def search_destinations(budget, num_travelers, preferences=None):
+    """Search the web for vacation destinations matching the given budget,
+    number of travelers, and preferences."""
     search_prompt = (
         f"Search the web for current vacation destination ideas suitable for "
         f"{num_travelers} travelers with a total budget of ${budget}"
@@ -63,17 +70,23 @@ def search_destinations(budget, num_travelers, preferences=None):
         + " Give a short list (2-3 destinations) with an approximate cost per person "
         "and one sentence explaining why each fits."
     )
+
+    # Run the search using the Claude model with the web search tool
     sub_response = client.messages.create(
         model="claude-sonnet-5",
         max_tokens=1000,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
         messages=[{"role": "user", "content": search_prompt}]
     )
+
+    # Extract and join the text blocks from the response into a single string
     text_parts = [block.text for block in sub_response.content if block.type == "text"]
     return "\n".join(text_parts)
 
 
 def search_activities(destination, num_travelers, trip_duration_days=None):
+    """Search the web for activities at a given destination, based on the
+    number of travelers and trip duration."""
     search_prompt = (
         f"Search the web for current activity ideas suitable for "
         f"{num_travelers} travelers in this destination: {destination}."
@@ -81,19 +94,22 @@ def search_activities(destination, num_travelers, trip_duration_days=None):
         + " Give a short list (2-3 activities) with an approximate cost per person "
         "and one sentence explaining why each fits."
     )
+
     sub_response = client.messages.create(
         model="claude-sonnet-5",
         max_tokens=1000,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
         messages=[{"role": "user", "content": search_prompt}]
     )
+
     text_parts = [block.text for block in sub_response.content if block.type == "text"]
     return "\n".join(text_parts)
 
 
-# --- Boucle agentique principale ---
+# --- Main agent loop ---
+
 messages = [
-    {"role": "user", "content": "We're going to Cancun for 5 days with 2 people, budget $3000. Suggest some activities for us."}
+    {"role": "user", "content": "I want a relaxing trip, no specific budget, just me."}
 ]
 
 response = client.messages.create(
@@ -105,14 +121,14 @@ response = client.messages.create(
 
 print("--- First response ---")
 print(response.content)
-print("Stop reason:", response.stop_reason)
+print("Stop reason:", response.stop_reason)  # "tool_use" means Claude needs a tool result before it can continue
 
 messages.append({"role": "assistant", "content": response.content})
 
-if response.stop_reason == "tool_use":
+if response.stop_reason == "tool_use":  # Check if Claude requested a tool call
     tool_results = []
 
-    for block in response.content:
+    for block in response.content:  # Loop through response blocks to find tool_use requests
         if block.type == "tool_use":
             if block.name == "search_destinations":
                 result = search_destinations(**block.input)
@@ -135,4 +151,4 @@ if response.stop_reason == "tool_use":
     )
 
     print("\n--- Final response ---")
-    print(final_response.content[0].text)
+    print(final_response.content[0].text)  # Final answer for the user
