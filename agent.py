@@ -164,7 +164,6 @@ if response.stop_reason == "tool_use":  # Check if Claude requested a tool call
         if block.type == "tool_use":
             if block.name == "search_destinations":
                 result = search_destinations(**block.input)
-                print("\n[DEBUG] Tool result:", result[:200])
             elif block.name == "search_activities":
                 result = search_activities(**block.input)
 
