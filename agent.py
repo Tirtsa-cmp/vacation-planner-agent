@@ -1,12 +1,18 @@
 import os
 from dotenv import load_dotenv
 import anthropic
+import chromadb
 
 load_dotenv()  # Load environment variables from the .env file
 
 # Create the Anthropic client using the API key stored in the environment variable
 client = anthropic.Anthropic(api_key=os.getenv("ANTHROPIC_API_KEY"))
 
+
+
+# Persistent Chroma client, using the same folder as rag_test.py
+chroma_client = chromadb.PersistentClient(path="./chroma_db")
+collection = chroma_client.get_or_create_collection(name="destinations")
 # --- Definition of the tools ---
 tools = [
     # Tool 1: search_destinations
@@ -59,10 +65,20 @@ tools = [
 
 
 # --- Python functions behind each tool ---
-
 def search_destinations(budget, num_travelers, preferences=None):
-    """Search the web for vacation destinations matching the given budget,
-    number of travelers, and preferences."""
+    """Search for vacation destinations matching the given budget,
+    number of travelers, and preferences. Tries the local RAG database first,
+    falls back to a live web search if nothing relevant is found."""
+    
+    query = f"vacation destination for {preferences or 'general'} trip"
+    
+    # Try RAG first
+    rag_result = rag_search(query)
+    
+    if rag_result:
+        return f"[From internal knowledge base]\n{rag_result}"
+    
+    # Fallback to web search if nothing relevant found in the local database
     search_prompt = (
         f"Search the web for current vacation destination ideas suitable for "
         f"{num_travelers} travelers with a total budget of ${budget}"
@@ -70,18 +86,14 @@ def search_destinations(budget, num_travelers, preferences=None):
         + " Give a short list (2-3 destinations) with an approximate cost per person "
         "and one sentence explaining why each fits."
     )
-
-    # Run the search using the Claude model with the web search tool
     sub_response = client.messages.create(
         model="claude-sonnet-5",
         max_tokens=1000,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
         messages=[{"role": "user", "content": search_prompt}]
     )
-
-    # Extract and join the text blocks from the response into a single string
     text_parts = [block.text for block in sub_response.content if block.type == "text"]
-    return "\n".join(text_parts)
+    return f"[From live web search]\n" + "\n".join(text_parts)
 
 
 def search_activities(destination, num_travelers, trip_duration_days=None):
@@ -105,11 +117,31 @@ def search_activities(destination, num_travelers, trip_duration_days=None):
     text_parts = [block.text for block in sub_response.content if block.type == "text"]
     return "\n".join(text_parts)
 
+def rag_search(query, n_results=2, distance_threshold=1.15):
+    """Search the local Chroma vector database for relevant destination info.
+    Returns matching text if results are close enough, otherwise returns None."""
+    results = collection.query(
+        query_texts=[query],
+        n_results=n_results
+    )
+
+    documents = results["documents"][0]
+    distances = results["distances"][0]
+
+    # Keep only results that are close enough to be considered relevant
+    relevant_docs = [
+        doc for doc, dist in zip(documents, distances)
+        if dist < distance_threshold
+    ]
+
+    if relevant_docs:
+        return "\n".join(relevant_docs)
+    return None
 
 # --- Main agent loop ---
 
 messages = [
-    {"role": "user", "content": "I want a relaxing trip, no specific budget, just me."}
+    {"role": "user", "content": "We want a nature-focused trip somewhere cold with glaciers and volcanoes, budget $2000, 2 travelers. Where should we go?"}
 ]
 
 response = client.messages.create(
@@ -128,10 +160,11 @@ messages.append({"role": "assistant", "content": response.content})
 if response.stop_reason == "tool_use":  # Check if Claude requested a tool call
     tool_results = []
 
-    for block in response.content:  # Loop through response blocks to find tool_use requests
+    for block in response.content:
         if block.type == "tool_use":
             if block.name == "search_destinations":
                 result = search_destinations(**block.input)
+                print("\n[DEBUG] Tool result:", result[:200])
             elif block.name == "search_activities":
                 result = search_activities(**block.input)
 
@@ -150,5 +183,6 @@ if response.stop_reason == "tool_use":  # Check if Claude requested a tool call
         messages=messages
     )
 
+    final_text_parts = [block.text for block in final_response.content if block.type == "text"]
     print("\n--- Final response ---")
-    print(final_response.content[0].text)  # Final answer for the user
+    print("\n".join(final_text_parts))

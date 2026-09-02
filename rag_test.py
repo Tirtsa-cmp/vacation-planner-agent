@@ -1,26 +1,29 @@
 import chromadb
 
-# Create a Chroma client (local, in-memory mode — everything stays on your machine)
-chroma_client = chromadb.Client()
+# Persistent client: data is saved to disk in the given folder, and survives between script runs
+chroma_client = chromadb.PersistentClient(path="./chroma_db")
 
-# Create a collection (similar to a table in a traditional database)
-collection = chroma_client.create_collection(name="destinations_test")
+# get_or_create avoids an error if the collection already exists from a previous run
+collection = chroma_client.get_or_create_collection(name="destinations")
 
-# Add sample documents (Chroma automatically computes embeddings for each one)
+destinations_data = [
+    {"id": "bali", "text": "Bali, Indonesia is a tropical island known for beautiful beaches, world-class surfing, lush rice terraces, and a relaxed, spiritual atmosphere. Popular with couples and solo travelers seeking relaxation combined with adventure like hiking volcanoes or visiting waterfalls. Mid-range budget destination."},
+    {"id": "paris", "text": "Paris, France is a major cultural capital known for iconic landmarks like the Eiffel Tower, world-class museums like the Louvre, and fine dining. Ideal for travelers interested in history, art, architecture, and romantic city breaks. Can be a higher-budget destination depending on season."},
+    {"id": "swiss_alps", "text": "The Swiss Alps offer world-class skiing and snowboarding in winter, and extensive hiking trails with stunning mountain scenery in summer. Great for active travelers and nature lovers, families, or groups looking for outdoor adventure. Higher budget due to Switzerland's cost of living."},
+    {"id": "cancun", "text": "Cancun, Mexico is a popular all-inclusive beach destination with white sand beaches, warm turquoise water, and a lively nightlife scene. Great for groups, couples, and budget-conscious travelers seeking a classic beach vacation with easy logistics."},
+    {"id": "kyoto", "text": "Kyoto, Japan is the cultural heart of Japan, known for ancient temples, traditional gardens, and geisha districts. Ideal for travelers interested in history, culture, and a peaceful, contemplative atmosphere. Mid to higher budget destination."}
+]
+
+# Add all documents to the collection at once
 collection.add(
-    documents=[
-        "Bali is a tropical island in Indonesia known for beaches, surfing, rice terraces, and a relaxed atmosphere.",
-        "Paris is the capital of France, famous for museums, historic architecture, and fine dining.",
-        "The Swiss Alps offer world-class skiing, hiking trails, and stunning mountain scenery."
-    ],
-    ids=["doc1", "doc2", "doc3"]
+    documents=[d["text"] for d in destinations_data],
+    ids=[d["id"] for d in destinations_data]
 )
 
-# Query the collection using a natural language question
-# Chroma searches by meaning (semantic similarity), not by exact keyword matching
 results = collection.query(
-    query_texts=["I want a relaxing beach vacation"],
+    query_texts=["a peaceful cultural trip with historic sites"],
     n_results=2
 )
 
-print(results)
+print(results["documents"])
+print(results["distances"])
