@@ -117,7 +117,7 @@ def search_activities(destination, num_travelers, trip_duration_days=None):
     text_parts = [block.text for block in sub_response.content if block.type == "text"]
     return "\n".join(text_parts)
 
-def rag_search(query, n_results=2, distance_threshold=1.15):
+def rag_search(query, n_results=2, distance_threshold=1.0):
     """Search the local Chroma vector database for relevant destination info.
     Returns matching text if results are close enough, otherwise returns None."""
     results = collection.query(
