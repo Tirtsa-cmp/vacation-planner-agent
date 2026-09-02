@@ -33,7 +33,8 @@ tools = [
             "properties": {
                 "budget": {"type": "number", "description": "Total trip budget in USD."},
                 "num_travelers": {"type": "integer", "description": "Number of people traveling together."},
-                "preferences": {"type": "string", "description": "Type of trip desired, e.g. 'beach', 'city', 'mountains', 'culture'."}
+                "preferences": {"type": "string", "description": "Type of trip desired, e.g. 'beach', 'city', 'mountains', 'culture'."},
+                "country_of_departure": {"type": "string", "description": "The country from which the travelers will depart. efaults to France if not specified."}
             },
             "required": ["budget", "num_travelers"]
         }
@@ -65,7 +66,7 @@ tools = [
 
 
 # --- Python functions behind each tool ---
-def search_destinations(budget, num_travelers, preferences=None):
+def search_destinations(budget, num_travelers, preferences=None, country_of_departure="France"):
     """Search for vacation destinations matching the given budget,
     number of travelers, and preferences. Tries the local RAG database first,
     falls back to a live web search if nothing relevant is found."""
@@ -81,7 +82,7 @@ def search_destinations(budget, num_travelers, preferences=None):
     # Fallback to web search if nothing relevant found in the local database
     search_prompt = (
         f"Search the web for current vacation destination ideas suitable for "
-        f"{num_travelers} travelers with a total budget of ${budget}"
+        f"{num_travelers} travelers departing from {country_of_departure}, with a total budget of ${budget}"
         + (f", focused on {preferences} trips." if preferences else ".")
         + " Give a short list (2-3 destinations) with an approximate cost per person "
         "and one sentence explaining why each fits."
@@ -141,7 +142,7 @@ def rag_search(query, n_results=2, distance_threshold=1.0):
 # --- Main agent loop ---
 
 messages = [
-    {"role": "user", "content": "We want a nature-focused trip somewhere cold with glaciers and volcanoes, budget $2000, 2 travelers. Where should we go?"}
+    {"role": "user", "content": "We want a lovely trip somewhere, budget $1000, 2 travelers, 3 days. Where should we go?"}
 ]
 
 response = client.messages.create(
