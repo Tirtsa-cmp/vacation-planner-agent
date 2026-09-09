@@ -171,7 +171,7 @@ def rag_search(query, n_results=2, distance_threshold=1.0):
 
 # --- Main agent loop ---
 messages = [
-    {"role": "user", "content": "We want a lovely 3-day beach trip, budget $2500, 2 travelers, love beaches. Suggest a destination and activities for us."}
+    {"role": "user", "content": "We want a lovely 3-day beach trip, budget $2500, 2 travelers, love beaches. Pick the best destination for us and then suggest activities there too, all in one go."}
 ]
 
 total_cost_per_person = 0
