@@ -261,23 +261,24 @@ while True:
                 })
 
         budget_status = check_budget(trip_items, budget_per_person)
-        budget_note = (
-            f"\n\n[SYSTEM NOTE: Running total so far: ${budget_status['total_per_person']}/person. "
-            + (
-                f"Budget: ${budget_per_person:.0f}/person. "
-                f"{'Within budget' if budget_status['within_budget'] else 'OVER budget'} "
-                f"(${budget_status['remaining']:.0f} remaining). "
-                + ("The user wants to make the most of their budget — if there's significant "
-                "remaining budget (more than $200/person), proactively suggest upgrades, "
-                "additional activities, better accommodation, or premium experiences to use "
-                "it well, rather than leaving a large amount unspent."
-                if budget_status['remaining'] and budget_status['remaining'] > 200
-                else ""
-                )
-                if budget_per_person else "No budget specified yet."
-            )
-            + " Take this into account for your response.]"
+
+        items_breakdown = "\n".join(
+            f"- {item['name']} ({item['category']}): ${item['cost_per_person_usd']}/person"
+            for item in trip_items
         )
+
+        if budget_per_person:
+            budget_note = (
+                f"\n\n(Budget tracker — calculated by the app from the tool results above: "
+                f"itemized costs: {items_breakdown if trip_items else 'none yet'}. "
+                f"Total so far: ${budget_status['total_per_person']}/person. "
+                f"User's budget: ${budget_per_person:.0f}/person. "
+                f"Remaining: ${budget_status['remaining']:.0f}/person.)"
+            )
+        else:
+            budget_note = (
+                f"\n\n(Budget tracker: no budget specified by the user yet.)"
+            )
         tool_results.append({"type": "text", "text": budget_note})
 
         messages.append({"role": "user", "content": tool_results})
