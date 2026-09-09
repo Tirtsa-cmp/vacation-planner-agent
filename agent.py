@@ -203,71 +203,83 @@ def check_budget(trip_items, budget_per_person):
         "within_budget": total <= budget_per_person if budget_per_person else None,
         "remaining": (budget_per_person - total) if budget_per_person else None
     }
-# --- Main agent loop ---
-messages = [
-    {"role": "user", "content": "We want a lovely 3-day beach trip, budget $2500, 2 travelers, love beaches. Pick the best destination for us and then suggest activities there too, all in one go."}
-]
 
-trip_items = []       # unified list of all costed items (destinations AND activities)
+# --- Interactive main agent loop ---
+
+print("🌴 Vacation Planner Agent — type 'quit' to exit\n")
+
+messages = []
+trip_items = []
 budget_per_person = None
-max_turns = 5
-turn_count = 0
 
-while turn_count < max_turns:
-    turn_count += 1
+while True:
+    user_input = input("You: ").strip()
 
-    response = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=2000,
-        tools=tools,
-        messages=messages
-    )
-
-    messages.append({"role": "assistant", "content": response.content})
-
-    if response.stop_reason != "tool_use":
-        final_text_parts = [block.text for block in response.content if block.type == "text"]
-        print("\n--- Final response ---")
-        print("\n".join(final_text_parts))
-        print(f"\n[DEBUG] Trip items: {trip_items}")
+    if user_input.lower() in ["quit", "exit"]:
+        print("Goodbye! Have a great trip. ✈️")
         break
 
-    tool_results = []
+    messages.append({"role": "user", "content": user_input})
 
-    for block in response.content:
-        if block.type == "tool_use":
-            print(f"[DEBUG] Turn {turn_count}: {block.name} called")
+    max_turns = 5
+    turn_count = 0
 
-            if block.name == "search_destinations":
-                result = search_destinations(**block.input)
-                if "budget" in block.input and "num_travelers" in block.input:
-                    budget_per_person = block.input["budget"] / block.input["num_travelers"]
-                add_to_trip_budget(trip_items, result, "destination")
+    while turn_count < max_turns:
+        turn_count += 1
 
-            elif block.name == "search_activities":
-                result = search_activities(**block.input)
-                add_to_trip_budget(trip_items, result, "activity")
-
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": json.dumps(result)
-            })
-
-    # Single, unified budget check based on everything accumulated so far
-    budget_status = check_budget(trip_items, budget_per_person)
-    budget_note = (
-        f"\n\n[SYSTEM NOTE: Running total so far: ${budget_status['total_per_person']}/person. "
-        + (
-            f"Budget: ${budget_per_person:.0f}/person. "
-            f"{'Within budget' if budget_status['within_budget'] else 'OVER budget'} "
-            f"(${budget_status['remaining']:.0f} remaining)."
-            if budget_per_person else "No budget specified yet."
+        response = client.messages.create(
+            model="claude-sonnet-5",
+            max_tokens=2000,
+            tools=tools,
+            messages=messages
         )
-        + " Take this into account for your response.]"
-    )
-    tool_results.append({"type": "text", "text": budget_note})
 
-    messages.append({"role": "user", "content": tool_results})
-else:
-    print("\n[WARNING] Max turns reached without a final answer.")
+        messages.append({"role": "assistant", "content": response.content})
+
+        if response.stop_reason != "tool_use":
+            final_text_parts = [block.text for block in response.content if block.type == "text"]
+            print(f"\nAgent: {''.join(final_text_parts)}\n")
+            break
+
+        tool_results = []
+
+        for block in response.content:
+            if block.type == "tool_use":
+                if block.name == "search_destinations":
+                    result = search_destinations(**block.input)
+                    if "budget" in block.input and "num_travelers" in block.input:
+                        budget_per_person = block.input["budget"] / block.input["num_travelers"]
+                    add_to_trip_budget(trip_items, result, "destination")
+                elif block.name == "search_activities":
+                    result = search_activities(**block.input)
+                    add_to_trip_budget(trip_items, result, "activity")
+
+                tool_results.append({
+                    "type": "tool_result",
+                    "tool_use_id": block.id,
+                    "content": json.dumps(result)
+                })
+
+        budget_status = check_budget(trip_items, budget_per_person)
+        budget_note = (
+            f"\n\n[SYSTEM NOTE: Running total so far: ${budget_status['total_per_person']}/person. "
+            + (
+                f"Budget: ${budget_per_person:.0f}/person. "
+                f"{'Within budget' if budget_status['within_budget'] else 'OVER budget'} "
+                f"(${budget_status['remaining']:.0f} remaining). "
+                + ("The user wants to make the most of their budget — if there's significant "
+                "remaining budget (more than $200/person), proactively suggest upgrades, "
+                "additional activities, better accommodation, or premium experiences to use "
+                "it well, rather than leaving a large amount unspent."
+                if budget_status['remaining'] and budget_status['remaining'] > 200
+                else ""
+                )
+                if budget_per_person else "No budget specified yet."
+            )
+            + " Take this into account for your response.]"
+        )
+        tool_results.append({"type": "text", "text": budget_note})
+
+        messages.append({"role": "user", "content": tool_results})
+    else:
+        print("\n[WARNING] Max turns reached without a final answer.\n")
