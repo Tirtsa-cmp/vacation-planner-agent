@@ -88,7 +88,7 @@ def search_destinations(budget, num_travelers, preferences=None, country_of_depa
         "Respond ONLY with a valid JSON array of exactly 3 destinations, no other text, "
         "in this exact format: "
         '[{"name": "Destination Name", "flight_cost_per_person_usd": 400, '
-        '"estimated_total_per_person_usd": 900, "description": "short description"}]'
+        '"cost_per_person_usd": 900, "description": "short description"}]'
     )
 
     sub_response = client.messages.create(
@@ -169,14 +169,50 @@ def rag_search(query, n_results=2, distance_threshold=1.0):
         return "\n".join(relevant_docs)
     return None
 
+def add_to_trip_budget(trip_items, new_items, category):
+    """Add cost items to the running trip budget tracker.
+    For destinations, only the cheapest option is counted (since the user
+    will pick just one). For activities, all items are added since the
+    user may do several."""
+    if category == "destination" and new_items:
+        # Remove any previously tracked destination (only keep the latest search)
+        trip_items[:] = [item for item in trip_items if item["category"] != "destination"]
+        cheapest = min(new_items, key=lambda d: d.get("cost_per_person_usd", float("inf")))
+        trip_items.append({
+            "category": "destination",
+            "name": cheapest.get("name", "Unknown"),
+            "cost_per_person_usd": cheapest.get("cost_per_person_usd")
+        })
+    else:
+        for item in new_items:
+            cost = item.get("cost_per_person_usd")
+            if cost is not None:
+                trip_items.append({
+                    "category": category,
+                    "name": item.get("name", "Unknown"),
+                    "cost_per_person_usd": cost
+                })
+    return trip_items 
+
+
+def check_budget(trip_items, budget_per_person):
+    """Calculate the total cost so far and compare it to the budget."""
+    total = sum(item["cost_per_person_usd"] for item in trip_items)
+    return {
+        "total_per_person": total,
+        "within_budget": total <= budget_per_person if budget_per_person else None,
+        "remaining": (budget_per_person - total) if budget_per_person else None
+    }
 # --- Main agent loop ---
 messages = [
     {"role": "user", "content": "We want a lovely 3-day beach trip, budget $2500, 2 travelers, love beaches. Pick the best destination for us and then suggest activities there too, all in one go."}
 ]
 
-total_cost_per_person = 0
-max_turns = 5  # safety limit to avoid an infinite loop
+trip_items = []       # unified list of all costed items (destinations AND activities)
+budget_per_person = None
+max_turns = 5
 turn_count = 0
+
 while turn_count < max_turns:
     turn_count += 1
 
@@ -189,32 +225,28 @@ while turn_count < max_turns:
 
     messages.append({"role": "assistant", "content": response.content})
 
-    # Check FIRST if Claude is done (before doing anything else)
     if response.stop_reason != "tool_use":
         final_text_parts = [block.text for block in response.content if block.type == "text"]
         print("\n--- Final response ---")
         print("\n".join(final_text_parts))
-        print(f"\n[DEBUG] Total calculated cost per person: ${total_cost_per_person}")
-        break  # this break is INSIDE the if, only runs when Claude is truly done
+        print(f"\n[DEBUG] Trip items: {trip_items}")
+        break
 
-    # Otherwise, execute tools and continue the loop
     tool_results = []
-    budget_per_person = None
-    destinations_result = None  # store this specifically to build the note later
 
     for block in response.content:
         if block.type == "tool_use":
             print(f"[DEBUG] Turn {turn_count}: {block.name} called")
+
             if block.name == "search_destinations":
                 result = search_destinations(**block.input)
-                destinations_result = result  # remember this for the budget note below
                 if "budget" in block.input and "num_travelers" in block.input:
                     budget_per_person = block.input["budget"] / block.input["num_travelers"]
+                add_to_trip_budget(trip_items, result, "destination")
+
             elif block.name == "search_activities":
                 result = search_activities(**block.input)
-                for item in result:
-                    if item.get("cost_per_person_usd"):
-                        total_cost_per_person += item["cost_per_person_usd"]
+                add_to_trip_budget(trip_items, result, "activity")
 
             tool_results.append({
                 "type": "tool_result",
@@ -222,30 +254,20 @@ while turn_count < max_turns:
                 "content": json.dumps(result)
             })
 
-    # Build the budget note OUTSIDE the loop, using the stored destinations_result
-    if budget_per_person is not None and destinations_result is not None:
-        affordable_options = [
-            d for d in destinations_result
-            if d.get("estimated_total_per_person_usd", 0) <= budget_per_person
-        ]
-        if affordable_options:
-            budget_note = (
-                f"\n\n[SYSTEM NOTE: The user's budget is ${budget_per_person:.0f} per person. "
-                f"{len(affordable_options)} of the {len(destinations_result)} destinations found "
-                f"fit within this budget. Recommend one of the affordable options clearly, and "
-                f"only mention the others as alternatives if the user wants to stretch their budget.]"
-            )
-        else:
-            budget_note = (
-                f"\n\n[SYSTEM NOTE: The user's budget is ${budget_per_person:.0f} per person, "
-                f"but none of the destinations found fit within it. Clearly warn the user "
-                f"and suggest either increasing the budget or searching for cheaper alternatives.]"
-            )
-    else:
-        budget_note = (
-            f"\n\n[SYSTEM NOTE: Running total estimated activity cost per person so far: "
-            f"${total_cost_per_person}. Take this into account for your final recommendation.]"
+    # Single, unified budget check based on everything accumulated so far
+    budget_status = check_budget(trip_items, budget_per_person)
+    budget_note = (
+        f"\n\n[SYSTEM NOTE: Running total so far: ${budget_status['total_per_person']}/person. "
+        + (
+            f"Budget: ${budget_per_person:.0f}/person. "
+            f"{'Within budget' if budget_status['within_budget'] else 'OVER budget'} "
+            f"(${budget_status['remaining']:.0f} remaining)."
+            if budget_per_person else "No budget specified yet."
         )
-
+        + " Take this into account for your response.]"
+    )
     tool_results.append({"type": "text", "text": budget_note})
+
     messages.append({"role": "user", "content": tool_results})
+else:
+    print("\n[WARNING] Max turns reached without a final answer.")
