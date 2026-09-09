@@ -2,6 +2,7 @@ import os
 from dotenv import load_dotenv
 import anthropic
 import chromadb
+import json
 
 load_dotenv()  # Load environment variables from the .env file
 
@@ -68,44 +69,62 @@ tools = [
 # --- Python functions behind each tool ---
 def search_destinations(budget, num_travelers, preferences=None, country_of_departure="France"):
     """Search for vacation destinations matching the given budget,
-    number of travelers, and preferences. Tries the local RAG database first,
-    falls back to a live web search if nothing relevant is found."""
+    number of travelers, and preferences. Uses RAG to find destination
+    ideas, then always fetches a structured cost estimate via web search."""
     
     query = f"vacation destination for {preferences or 'general'} trip"
-    
-    # Try RAG first
     rag_result = rag_search(query)
     
     if rag_result:
-        return f"[From internal knowledge base]\n{rag_result}"
-    
-    # Fallback to web search if nothing relevant found in the local database
-    search_prompt = (
-        f"Search the web for current vacation destination ideas suitable for "
-        f"{num_travelers} travelers departing from {country_of_departure}, with a total budget of ${budget}"
-        + (f", focused on {preferences} trips." if preferences else ".")
-        + " Give a short list (2-3 destinations) with an approximate cost per person "
-        "and one sentence explaining why each fits."
-    )
+        # RAG gives us destination ideas (descriptive text), but we still need
+        # a structured, up-to-date cost estimate — so we search the web for that.
+        cost_prompt = (
+            f"Based on this destination information: {rag_result}\n\n"
+            f"Estimate the flight cost per person for {num_travelers} travelers "
+            f"departing from {country_of_departure}, plus a rough daily budget "
+            f"for accommodation and food. Give 1-2 destination options only. "
+            "Respond ONLY with a valid JSON array, no other text, in this exact format: "
+            '[{"name": "Destination Name", "flight_cost_per_person_usd": 400, "description": "short description"}]'
+        )
+    else:
+        # Fallback: no RAG match, search the web from scratch for destination ideas
+        cost_prompt = (
+            f"Search the web for current vacation destination ideas suitable for "
+            f"{num_travelers} travelers departing from {country_of_departure}, "
+            f"with a total budget of ${budget}"
+            + (f", focused on {preferences} trips." if preferences else ".")
+            + " Give a short list (2-3 destinations), including estimated flight cost per person. "
+            "Respond ONLY with a valid JSON array, no other text, in this exact format: "
+            '[{"name": "Destination Name", "flight_cost_per_person_usd": 400, "description": "short description"}]'
+        )
+
     sub_response = client.messages.create(
         model="claude-sonnet-5",
         max_tokens=1000,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": search_prompt}]
+        messages=[{"role": "user", "content": cost_prompt}]
     )
     text_parts = [block.text for block in sub_response.content if block.type == "text"]
-    return f"[From live web search]\n" + "\n".join(text_parts)
+    raw_text = "\n".join(text_parts)
+    cleaned = raw_text.replace("```json", "").replace("```", "").strip()
 
+    try:
+        destinations = json.loads(cleaned)
+    except json.JSONDecodeError:
+        destinations = []
+
+    return destinations
 
 def search_activities(destination, num_travelers, trip_duration_days=None):
-    """Search the web for activities at a given destination, based on the
-    number of travelers and trip duration."""
+    """Search the web for activities at a given destination, returning
+    structured data with estimated costs per person."""
     search_prompt = (
         f"Search the web for current activity ideas suitable for "
         f"{num_travelers} travelers in this destination: {destination}."
         + (f" The trip lasts {trip_duration_days} days." if trip_duration_days else "")
-        + " Give a short list (2-3 activities) with an approximate cost per person "
-        "and one sentence explaining why each fits."
+        + " Give a short list (2-3 activities). "
+        "Respond ONLY with a valid JSON array, no other text, in this exact format: "
+        '[{"name": "Activity Name", "cost_per_person_usd": 50, "description": "short description"}]'
     )
 
     sub_response = client.messages.create(
@@ -116,7 +135,17 @@ def search_activities(destination, num_travelers, trip_duration_days=None):
     )
 
     text_parts = [block.text for block in sub_response.content if block.type == "text"]
-    return "\n".join(text_parts)
+    raw_text = "\n".join(text_parts)
+
+    # Clean up potential markdown code fences before parsing
+    cleaned = raw_text.replace("```json", "").replace("```", "").strip()
+
+    try:
+        activities = json.loads(cleaned)
+    except json.JSONDecodeError:
+        activities = []  # fallback: empty list if parsing fails
+
+    return activities
 
 def rag_search(query, n_results=2, distance_threshold=1.0):
     """Search the local Chroma vector database for relevant destination info.
@@ -140,49 +169,61 @@ def rag_search(query, n_results=2, distance_threshold=1.0):
     return None
 
 # --- Main agent loop ---
-
 messages = [
-    {"role": "user", "content": "We want a lovely trip somewhere, budget $1000, 2 travelers, 3 days. Where should we go?"}
+    {"role": "user", "content": "We want a lovely 3-day trip, budget $1000, 2 travelers. Suggest a destination and some activities."}
 ]
 
-response = client.messages.create(
-    model="claude-sonnet-5",
-    max_tokens=1000,
-    tools=tools,
-    messages=messages
-)
+total_cost_per_person = 0
+max_turns = 5  # safety limit to avoid an infinite loop
+turn_count = 0
 
-print("--- First response ---")
-print(response.content)
-print("Stop reason:", response.stop_reason)  # "tool_use" means Claude needs a tool result before it can continue
+while turn_count < max_turns:
+    turn_count += 1
 
-messages.append({"role": "assistant", "content": response.content})
-
-if response.stop_reason == "tool_use":  # Check if Claude requested a tool call
-    tool_results = []
-
-    for block in response.content:
-        if block.type == "tool_use":
-            if block.name == "search_destinations":
-                result = search_destinations(**block.input)
-            elif block.name == "search_activities":
-                result = search_activities(**block.input)
-
-            tool_results.append({
-                "type": "tool_result",
-                "tool_use_id": block.id,
-                "content": result
-            })
-
-    messages.append({"role": "user", "content": tool_results})
-
-    final_response = client.messages.create(
+    response = client.messages.create(
         model="claude-sonnet-5",
         max_tokens=1000,
         tools=tools,
         messages=messages
     )
 
-    final_text_parts = [block.text for block in final_response.content if block.type == "text"]
-    print("\n--- Final response ---")
-    print("\n".join(final_text_parts))
+    messages.append({"role": "assistant", "content": response.content})
+
+    if response.stop_reason != "tool_use":
+        final_text_parts = [block.text for block in response.content if block.type == "text"]
+        print("\n--- Final response ---")
+        print("\n".join(final_text_parts))
+        print(f"\n[DEBUG] Total calculated cost per person: ${total_cost_per_person}")
+        break
+
+    tool_results = []
+
+    for block in response.content:
+        if block.type == "tool_use":
+            if block.name == "search_destinations":
+                result = search_destinations(**block.input)
+                for item in result:
+                    if item.get("flight_cost_per_person_usd"):
+                        total_cost_per_person += item["flight_cost_per_person_usd"]
+            elif block.name == "search_activities":
+                result = search_activities(**block.input)
+                for item in result:
+                    if item.get("cost_per_person_usd"):
+                        total_cost_per_person += item["cost_per_person_usd"]
+
+            tool_results.append({
+                "type": "tool_result",
+                "tool_use_id": block.id,
+                "content": json.dumps(result)
+            })
+
+    budget_note = (
+        f"\n\n[SYSTEM NOTE: The running total estimated cost per person so far "
+        f"is ${total_cost_per_person}. Take this into account, and warn the user "
+        f"clearly if the total risks exceeding their stated budget.]"
+    )
+    tool_results.append({"type": "text", "text": budget_note})
+
+    messages.append({"role": "user", "content": tool_results})
+else:
+    print("\n[WARNING] Max turns reached without a final answer.")
