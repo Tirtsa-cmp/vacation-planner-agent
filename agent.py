@@ -69,39 +69,31 @@ tools = [
 
 # --- Python functions behind each tool ---
 def search_destinations(budget, num_travelers, preferences=None, country_of_departure="France"):
-    """Search for vacation destinations matching the given budget,
-    number of travelers, and preferences. Uses RAG to find destination
-    ideas, then always fetches a structured cost estimate via web search."""
+    """Search for vacation destinations that fit within the given budget,
+    number of travelers, and preferences."""
+    
+    budget_per_person = budget / num_travelers
     
     query = f"vacation destination for {preferences or 'general'} trip"
     rag_result = rag_search(query)
     
-    if rag_result:
-        # RAG gives us destination ideas (descriptive text), but we still need
-        # a structured, up-to-date cost estimate — so we search the web for that.
-        cost_prompt = (
-            f"Based on this destination information: {rag_result}\n\n"
-            f"Estimate the flight cost per person for {num_travelers} travelers "
-            f"departing from {country_of_departure}, plus a rough daily budget "
-            f"for accommodation and food. Give 1-2 destination options only. "
-            "Respond ONLY with a valid JSON array, no other text, in this exact format: "
-            '[{"name": "Destination Name", "flight_cost_per_person_usd": 400, "description": "short description"}]'
-        )
-    else:
-        # Fallback: no RAG match, search the web from scratch for destination ideas
-        cost_prompt = (
-            f"Search the web for current vacation destination ideas suitable for "
-            f"{num_travelers} travelers departing from {country_of_departure}, "
-            f"with a total budget of ${budget}"
-            + (f", focused on {preferences} trips." if preferences else ".")
-            + " Give a short list (2-3 destinations), including estimated flight cost per person. "
-            "Respond ONLY with a valid JSON array, no other text, in this exact format: "
-            '[{"name": "Destination Name", "flight_cost_per_person_usd": 400, "description": "short description"}]'
-        )
+    cost_prompt = (
+        f"Search the web for 3 vacation destinations suitable for "
+        f"{num_travelers} travelers departing from {country_of_departure}, "
+        f"where the TOTAL cost per person (flight + accommodation + food for a "
+        f"typical short trip) realistically fits within ${budget_per_person:.0f} per person. "
+        + (f"Focus on {preferences} trips. " if preferences else "")
+        + "Only suggest destinations that genuinely fit this budget — do not suggest "
+        "luxury or expensive options that would exceed it. "
+        "Respond ONLY with a valid JSON array of exactly 3 destinations, no other text, "
+        "in this exact format: "
+        '[{"name": "Destination Name", "flight_cost_per_person_usd": 400, '
+        '"estimated_total_per_person_usd": 900, "description": "short description"}]'
+    )
 
     sub_response = client.messages.create(
         model="claude-sonnet-5",
-        max_tokens=1000,
+        max_tokens=1500,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
         messages=[{"role": "user", "content": cost_prompt}]
     )
@@ -109,7 +101,6 @@ def search_destinations(budget, num_travelers, preferences=None, country_of_depa
     raw_text = "\n".join(text_parts)
     cleaned = raw_text.replace("```json", "").replace("```", "").strip()
 
-    # Extract JSON array even if surrounded by extra text
     match = re.search(r'\[.*\]', cleaned, re.DOTALL)
     if match:
         cleaned = match.group(0)
@@ -118,7 +109,7 @@ def search_destinations(budget, num_travelers, preferences=None, country_of_depa
         destinations = json.loads(cleaned)
     except json.JSONDecodeError:
         destinations = []
-    print(f"[DEBUG] Final parsed destinations: {destinations}")
+
     return destinations
 def search_activities(destination, num_travelers, trip_duration_days=None):
     """Search the web for activities at a given destination, returning
@@ -208,14 +199,17 @@ while turn_count < max_turns:
 
     # Otherwise, execute tools and continue the loop
     tool_results = []
+    budget_per_person = None
+    destinations_result = None  # store this specifically to build the note later
+
     for block in response.content:
         if block.type == "tool_use":
             print(f"[DEBUG] Turn {turn_count}: {block.name} called")
             if block.name == "search_destinations":
                 result = search_destinations(**block.input)
-                for item in result:
-                    if item.get("flight_cost_per_person_usd"):
-                        total_cost_per_person += item["flight_cost_per_person_usd"]
+                destinations_result = result  # remember this for the budget note below
+                if "budget" in block.input and "num_travelers" in block.input:
+                    budget_per_person = block.input["budget"] / block.input["num_travelers"]
             elif block.name == "search_activities":
                 result = search_activities(**block.input)
                 for item in result:
@@ -228,13 +222,30 @@ while turn_count < max_turns:
                 "content": json.dumps(result)
             })
 
-    budget_note = (
-        f"\n\n[SYSTEM NOTE: The running total estimated cost per person so far "
-        f"is ${total_cost_per_person}. Take this into account, and warn the user "
-        f"clearly if the total risks exceeding their stated budget.]"
-    )
-    tool_results.append({"type": "text", "text": budget_note})
+    # Build the budget note OUTSIDE the loop, using the stored destinations_result
+    if budget_per_person is not None and destinations_result is not None:
+        affordable_options = [
+            d for d in destinations_result
+            if d.get("estimated_total_per_person_usd", 0) <= budget_per_person
+        ]
+        if affordable_options:
+            budget_note = (
+                f"\n\n[SYSTEM NOTE: The user's budget is ${budget_per_person:.0f} per person. "
+                f"{len(affordable_options)} of the {len(destinations_result)} destinations found "
+                f"fit within this budget. Recommend one of the affordable options clearly, and "
+                f"only mention the others as alternatives if the user wants to stretch their budget.]"
+            )
+        else:
+            budget_note = (
+                f"\n\n[SYSTEM NOTE: The user's budget is ${budget_per_person:.0f} per person, "
+                f"but none of the destinations found fit within it. Clearly warn the user "
+                f"and suggest either increasing the budget or searching for cheaper alternatives.]"
+            )
+    else:
+        budget_note = (
+            f"\n\n[SYSTEM NOTE: Running total estimated activity cost per person so far: "
+            f"${total_cost_per_person}. Take this into account for your final recommendation.]"
+        )
 
+    tool_results.append({"type": "text", "text": budget_note})
     messages.append({"role": "user", "content": tool_results})
-else:
-    print("\n[WARNING] Max turns reached without a final answer.")
