@@ -1,4 +1,5 @@
 import os
+import re
 from dotenv import load_dotenv
 import anthropic
 import chromadb
@@ -108,13 +109,17 @@ def search_destinations(budget, num_travelers, preferences=None, country_of_depa
     raw_text = "\n".join(text_parts)
     cleaned = raw_text.replace("```json", "").replace("```", "").strip()
 
+    # Extract JSON array even if surrounded by extra text
+    match = re.search(r'\[.*\]', cleaned, re.DOTALL)
+    if match:
+        cleaned = match.group(0)
+
     try:
         destinations = json.loads(cleaned)
     except json.JSONDecodeError:
         destinations = []
-
+    print(f"[DEBUG] Final parsed destinations: {destinations}")
     return destinations
-
 def search_activities(destination, num_travelers, trip_duration_days=None):
     """Search the web for activities at a given destination, returning
     structured data with estimated costs per person."""
@@ -136,16 +141,21 @@ def search_activities(destination, num_travelers, trip_duration_days=None):
 
     text_parts = [block.text for block in sub_response.content if block.type == "text"]
     raw_text = "\n".join(text_parts)
-
-    # Clean up potential markdown code fences before parsing
     cleaned = raw_text.replace("```json", "").replace("```", "").strip()
+
+    match = re.search(r'\[.*\]', cleaned, re.DOTALL)
+    if match:
+        cleaned = match.group(0)
 
     try:
         activities = json.loads(cleaned)
     except json.JSONDecodeError:
-        activities = []  # fallback: empty list if parsing fails
+        activities = []
+        print(f"[DEBUG] Failed to parse activities from cleaned text: {cleaned}")
+    else:
+        print(f"[DEBUG] Final parsed activities: {activities}")
 
-    return activities
+    return activities  
 
 def rag_search(query, n_results=2, distance_threshold=1.0):
     """Search the local Chroma vector database for relevant destination info.
@@ -170,36 +180,37 @@ def rag_search(query, n_results=2, distance_threshold=1.0):
 
 # --- Main agent loop ---
 messages = [
-    {"role": "user", "content": "We want a lovely 3-day trip, budget $1000, 2 travelers. Suggest a destination and some activities."}
+    {"role": "user", "content": "We want a lovely 3-day beach trip, budget $2500, 2 travelers, love beaches. Suggest a destination and activities for us."}
 ]
 
 total_cost_per_person = 0
 max_turns = 5  # safety limit to avoid an infinite loop
 turn_count = 0
-
 while turn_count < max_turns:
     turn_count += 1
 
     response = client.messages.create(
         model="claude-sonnet-5",
-        max_tokens=1000,
+        max_tokens=2000,
         tools=tools,
         messages=messages
     )
 
     messages.append({"role": "assistant", "content": response.content})
 
+    # Check FIRST if Claude is done (before doing anything else)
     if response.stop_reason != "tool_use":
         final_text_parts = [block.text for block in response.content if block.type == "text"]
         print("\n--- Final response ---")
         print("\n".join(final_text_parts))
         print(f"\n[DEBUG] Total calculated cost per person: ${total_cost_per_person}")
-        break
+        break  # this break is INSIDE the if, only runs when Claude is truly done
 
+    # Otherwise, execute tools and continue the loop
     tool_results = []
-
     for block in response.content:
         if block.type == "tool_use":
+            print(f"[DEBUG] Turn {turn_count}: {block.name} called")
             if block.name == "search_destinations":
                 result = search_destinations(**block.input)
                 for item in result:
