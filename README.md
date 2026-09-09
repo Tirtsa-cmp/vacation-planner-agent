@@ -82,3 +82,13 @@ python agent.py
 - Add a search_flights / search_hotels tool
 - Improve retrieval with reranking or query expansion
 - Add a simple CLI or web interface
+
+## Design decisions
+
+### Why RAG isn't used for the final budget-critical search
+
+The project includes a working RAG pipeline (ChromaDB with 50 curated destinations) and it's fully functional for semantic search — see `rag_search()` and `seed_data.py`. However, the final `search_destinations` tool does **not** use it for the main recommendation flow.
+
+**Reasoning:** RAG excels at retrieving stable, descriptive knowledge (destination vibes, themes, general info) but is a poor fit for time-sensitive, budget-critical data like flight prices, which change constantly and aren't something a static local database can track reliably. For a feature where staying within budget is the core requirement, real-time web search provides more trustworthy numbers than a vector database seeded once with general descriptions.
+
+This is a deliberate tradeoff: I chose data reliability over reusing every technique learned, even though it means the RAG component is somewhat underused in the current flow. It remains available and could be reintroduced as a fast first-pass "inspiration" layer in a future iteration, with web search still handling final price validation.
