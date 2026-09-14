@@ -111,25 +111,40 @@ def search_destinations(budget, num_travelers, preferences=None, country_of_depa
         destinations = []
 
     return destinations
-def search_activities(destination, num_travelers, trip_duration_days=None):
-    """Search the web for activities at a given destination, returning
-    structured data with estimated costs per person."""
-    search_prompt = (
-        f"Search the web for current activity ideas suitable for "
-        f"{num_travelers} travelers in this destination: {destination}."
-        + (f" The trip lasts {trip_duration_days} days." if trip_duration_days else "")
-        + " Give a short list (2-3 activities). "
-        "Respond ONLY with a valid JSON array, no other text, in this exact format: "
-        '[{"name": "Activity Name", "cost_per_person_usd": 50, "description": "short description"}]'
+def search_destinations(budget, num_travelers, preferences=None, country_of_departure="France", already_suggested=None):
+    """Search for vacation destinations that fit within the given budget,
+    number of travelers, and preferences. Avoids repeating destinations
+    already suggested earlier in the conversation."""
+    
+    budget_per_person = budget / num_travelers
+
+    exclusion_text = ""
+    if already_suggested:
+        names = ", ".join(already_suggested)
+        exclusion_text = (
+            f" Do NOT suggest these destinations again, as they were already "
+            f"explored earlier in this conversation and did not fit what the "
+            f"user wanted: {names}. "
+        )
+
+    cost_prompt = (
+        f"Search the web for 3 vacation destinations suitable for "
+        f"{num_travelers} travelers departing from {country_of_departure}, "
+        f"where the TOTAL cost per person realistically fits within ${budget_per_person:.0f} per person. "
+        + (f"Focus on {preferences} trips. " if preferences else "")
+        + exclusion_text
+        + "Only suggest destinations that genuinely fit this budget. "
+        "Respond ONLY with a valid JSON array of exactly 3 destinations, no other text, "
+        "in this exact format: "
+        '[{"name": "Destination Name", "cost_per_person_usd": 900, "description": "short description"}]'
     )
 
     sub_response = client.messages.create(
         model="claude-sonnet-5",
-        max_tokens=1000,
+        max_tokens=1500,
         tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": search_prompt}]
+        messages=[{"role": "user", "content": cost_prompt}]
     )
-
     text_parts = [block.text for block in sub_response.content if block.type == "text"]
     raw_text = "\n".join(text_parts)
     cleaned = raw_text.replace("```json", "").replace("```", "").strip()
@@ -139,14 +154,11 @@ def search_activities(destination, num_travelers, trip_duration_days=None):
         cleaned = match.group(0)
 
     try:
-        activities = json.loads(cleaned)
+        destinations = json.loads(cleaned)
     except json.JSONDecodeError:
-        activities = []
-        print(f"[DEBUG] Failed to parse activities from cleaned text: {cleaned}")
-    else:
-        print(f"[DEBUG] Final parsed activities: {activities}")
+        destinations = []
 
-    return activities  
+    return destinations
 
 def rag_search(query, n_results=2, distance_threshold=1.0):
     """Search the local Chroma vector database for relevant destination info.
@@ -210,6 +222,7 @@ if __name__ == "__main__":
 
     messages = []
     trip_items = []
+    all_suggested_destinations = []
     budget_per_person = None
 
     while True:
@@ -245,14 +258,20 @@ if __name__ == "__main__":
 
             for block in response.content:
                 if block.type == "tool_use":
+                    print(f"[DEBUG] Turn {turn_count}: {block.name} called")
                     if block.name == "search_destinations":
-                        result = search_destinations(**block.input)
+                        result = search_destinations(**block.input, already_suggested=all_suggested_destinations)
+
+                        for item in result:
+                            if item.get("name") and item["name"] not in all_suggested_destinations:
+                                all_suggested_destinations.append(item["name"])
+
                         if "budget" in block.input and "num_travelers" in block.input:
                             budget_per_person = block.input["budget"] / block.input["num_travelers"]
-                        add_to_trip_budget(trip_items, result, "destination")
-                    elif block.name == "search_activities":
-                        result = search_activities(**block.input)
-                        add_to_trip_budget(trip_items, result, "activity")
+                            add_to_trip_budget(trip_items, result, "destination")        
+                        elif block.name == "search_activities":
+                            result = search_activities(**block.input)
+                            add_to_trip_budget(trip_items, result, "activity")
 
                     tool_results.append({
                         "type": "tool_result",
