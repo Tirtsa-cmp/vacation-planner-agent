@@ -205,82 +205,82 @@ def check_budget(trip_items, budget_per_person):
     }
 
 # --- Interactive main agent loop ---
+if __name__ == "__main__":
+    print("🌴 Vacation Planner Agent — type 'quit' to exit\n")
 
-print("🌴 Vacation Planner Agent — type 'quit' to exit\n")
+    messages = []
+    trip_items = []
+    budget_per_person = None
 
-messages = []
-trip_items = []
-budget_per_person = None
+    while True:
+        user_input = input("You: ").strip()
 
-while True:
-    user_input = input("You: ").strip()
-
-    if user_input.lower() in ["quit", "exit"]:
-        print("Goodbye! Have a great trip. ✈️")
-        break
-
-    messages.append({"role": "user", "content": user_input})
-
-    max_turns = 5
-    turn_count = 0
-
-    while turn_count < max_turns:
-        turn_count += 1
-
-        response = client.messages.create(
-            model="claude-sonnet-5",
-            max_tokens=2000,
-            tools=tools,
-            messages=messages
-        )
-
-        messages.append({"role": "assistant", "content": response.content})
-
-        if response.stop_reason != "tool_use":
-            final_text_parts = [block.text for block in response.content if block.type == "text"]
-            print(f"\nAgent: {''.join(final_text_parts)}\n")
+        if user_input.lower() in ["quit", "exit"]:
+            print("Goodbye! Have a great trip. ✈️")
             break
 
-        tool_results = []
+        messages.append({"role": "user", "content": user_input})
 
-        for block in response.content:
-            if block.type == "tool_use":
-                if block.name == "search_destinations":
-                    result = search_destinations(**block.input)
-                    if "budget" in block.input and "num_travelers" in block.input:
-                        budget_per_person = block.input["budget"] / block.input["num_travelers"]
-                    add_to_trip_budget(trip_items, result, "destination")
-                elif block.name == "search_activities":
-                    result = search_activities(**block.input)
-                    add_to_trip_budget(trip_items, result, "activity")
+        max_turns = 5
+        turn_count = 0
 
-                tool_results.append({
-                    "type": "tool_result",
-                    "tool_use_id": block.id,
-                    "content": json.dumps(result)
-                })
+        while turn_count < max_turns:
+            turn_count += 1
 
-        budget_status = check_budget(trip_items, budget_per_person)
-
-        items_breakdown = "\n".join(
-            f"- {item['name']} ({item['category']}): ${item['cost_per_person_usd']}/person"
-            for item in trip_items
-        )
-
-        if budget_per_person:
-            budget_note = (
-                f"\n\n(Budget tracker — calculated by the app from the tool results above: "
-                f"itemized costs: {items_breakdown if trip_items else 'none yet'}. "
-                f"Total so far: ${budget_status['total_per_person']}/person. "
-                f"User's budget: ${budget_per_person:.0f}/person. "
-                f"Remaining: ${budget_status['remaining']:.0f}/person.)"
+            response = client.messages.create(
+                model="claude-sonnet-5",
+                max_tokens=2000,
+                tools=tools,
+                messages=messages
             )
+
+            messages.append({"role": "assistant", "content": response.content})
+
+            if response.stop_reason != "tool_use":
+                final_text_parts = [block.text for block in response.content if block.type == "text"]
+                print(f"\nAgent: {''.join(final_text_parts)}\n")
+                break
+
+            tool_results = []
+
+            for block in response.content:
+                if block.type == "tool_use":
+                    if block.name == "search_destinations":
+                        result = search_destinations(**block.input)
+                        if "budget" in block.input and "num_travelers" in block.input:
+                            budget_per_person = block.input["budget"] / block.input["num_travelers"]
+                        add_to_trip_budget(trip_items, result, "destination")
+                    elif block.name == "search_activities":
+                        result = search_activities(**block.input)
+                        add_to_trip_budget(trip_items, result, "activity")
+
+                    tool_results.append({
+                        "type": "tool_result",
+                        "tool_use_id": block.id,
+                        "content": json.dumps(result)
+                    })
+
+            budget_status = check_budget(trip_items, budget_per_person)
+
+            items_breakdown = "\n".join(
+                f"- {item['name']} ({item['category']}): ${item['cost_per_person_usd']}/person"
+                for item in trip_items
+            )
+
+            if budget_per_person:
+                budget_note = (
+                    f"\n\n(Budget tracker — calculated by the app from the tool results above: "
+                    f"itemized costs: {items_breakdown if trip_items else 'none yet'}. "
+                    f"Total so far: ${budget_status['total_per_person']}/person. "
+                    f"User's budget: ${budget_per_person:.0f}/person. "
+                    f"Remaining: ${budget_status['remaining']:.0f}/person.)"
+                )
+            else:
+                budget_note = (
+                    f"\n\n(Budget tracker: no budget specified by the user yet.)"
+                )
+            tool_results.append({"type": "text", "text": budget_note})
+
+            messages.append({"role": "user", "content": tool_results})
         else:
-            budget_note = (
-                f"\n\n(Budget tracker: no budget specified by the user yet.)"
-            )
-        tool_results.append({"type": "text", "text": budget_note})
-
-        messages.append({"role": "user", "content": tool_results})
-    else:
-        print("\n[WARNING] Max turns reached without a final answer.\n")
+            print("\n[WARNING] Max turns reached without a final answer.\n")
