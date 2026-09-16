@@ -352,8 +352,6 @@ def compare_hotels(destination, budget_level=None):
     except json.JSONDecodeError:
         hotels = []
     return hotels
-
-
 def compare_flights(destination, num_travelers, country_of_departure="France"):
     """Search the web for approximate flight price comparisons.
     Returns estimates only — not real-time fares."""

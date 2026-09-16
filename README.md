@@ -1,36 +1,41 @@
-# Vacation Planner Agent
+ Vacation Planner Agent
 
-An AI agent built with the Claude API that plans vacations by orchestrating multiple tools — destination search, activity search, and budget tracking — through a natural, multi-turn conversation.
+An AI agent built with the Claude API that plans vacations through a natural, multi-turn conversation — searching destinations and activities within budget, comparing hotels and flights, and generating booking links once a destination is confirmed.
 
 ## Features
 
 - **Interactive conversational agent**: chat with the agent in the terminal; it remembers context across turns (destination, budget, preferences) without needing to repeat information
-- **Agentic tool-use loop**: the agent decides which tools to call, executes them, and synthesizes responses — including chaining multiple tool calls in sequence (e.g., destination search followed by activity search) without user intervention
-- **Two specialized tools**:
-  - `search_destinations` — finds destinations that genuinely fit the user's budget per person, returning structured cost data
-  - `search_activities` — suggests activities once a destination is chosen, with structured per-person costs
-- **Structured, code-verified budget tracking**: every cost returned by tools is parsed into structured JSON and tracked in a single unified list (`trip_items`). The running total, remaining budget, and status are calculated in Python — not estimated by the LLM — and injected into the conversation as exact figures the agent must reference rather than recalculate
-- **Budget-aware recommendations**: when there's significant budget left, the agent proactively suggests upgrades (better accommodation, premium activities, private guides) instead of leaving money unused
-- **Local knowledge base (RAG)**: a persistent ChromaDB vector database with 50 curated destinations, fully functional for semantic search (see `rag_test.py`) — see "Design decisions" below for why it's not used in the final budget-critical flow
-- **Sub-agent pattern**: each tool internally makes its own Claude API call with web search, keeping the main agent's logic modular
-- **Robust JSON parsing**: tool outputs are cleaned and extracted via regex before parsing, with graceful fallback if the LLM's output isn't perfectly formatted
+- **Agentic tool-use loop**: the agent decides which tools to call, executes them, and chains multiple calls in sequence without user intervention
+- **Five specialized tools**:
+  - `search_destinations` — finds destinations that genuinely fit the user's budget per person
+  - `search_activities` — suggests activities once a destination is chosen
+  - `compare_hotels` — approximate hotel price comparisons for a destination
+  - `compare_flights` — approximate flight price comparisons from a departure country
+  - `generate_booking_links` — generates real search links to Google Flights, Booking.com, and GetYourGuide, pre-filled with the destination
+- **No repeated suggestions**: the agent tracks every destination and activity already mentioned in the conversation and avoids repeating them, even after the user rejects an option or changes direction
+- **Structured, code-verified budget tracking**: costs are parsed into structured JSON and tracked in a unified list. Totals are calculated in Python — not estimated by the LLM — and presented to the agent as plain contextual figures to reference
+- **Budget-aware recommendations**: when there's significant budget left, the agent proactively suggests upgrades instead of leaving money unused
+- **Local knowledge base (RAG)**: a persistent ChromaDB vector database with 50 curated destinations (see `rag_test.py`) — see "Design decisions" for why it's not used in the final budget-critical search
+- **Unit tests**: core budget logic (`check_budget`, `add_to_trip_budget`) is covered by tests in `test_budget.py`, independent of any API calls
 
 ## Architecture
 
-User (terminal input)
+User (terminal input, ongoing conversation)
 |
 v
-Main agent loop (multi-turn, persistent conversation history)
+Main agent loop (multi-turn, persistent history)
 |
-|--- search_destinations ---> web search sub-agent (budget-constrained query)
-|
-|--- search_activities -----> web search sub-agent
+|--- search_destinations --> web search sub-agent (budget-constrained, avoids repeats)
+|--- search_activities ----> web search sub-agent (avoids repeats)
+|--- compare_hotels -------> web search sub-agent (estimates only)
+|--- compare_flights ------> web search sub-agent (estimates only)
+|--- generate_booking_links -> direct URL construction (no API call)
 |
 v
-Unified budget tracker (Python-calculated, injected as exact figures)
+Unified budget tracker (Python-calculated)
 |
 v
-Agent response (references exact totals, suggests upgrades if budget allows)
+Agent response
 
 
 ## Tech stack
@@ -75,34 +80,36 @@ python agent.py
 
    Type your travel request, chat naturally with the agent, and type `quit` to exit.
 
+7. Run the tests:
+
+python test_budget.py
+
+
 ## Design decisions
 
 ### Why RAG isn't used for the final budget-critical search
+RAG excels at retrieving stable, descriptive knowledge but is a poor fit for time-sensitive data like flight prices. Real-time web search provides more trustworthy numbers for budget-critical features, even though it means the RAG component is somewhat underused in the current flow.
 
-The project includes a working RAG pipeline (ChromaDB with 50 curated destinations) and it's fully functional for semantic search. However, the final `search_destinations` tool does not use it for the main recommendation flow.
+### Why booking links are search links, not real reservations
+Actually booking flights/hotels requires paid, authenticated APIs (Amadeus, Booking.com partner API) that aren't accessible for a learning project. Instead, `generate_booking_links` builds real, working search URLs that take the user directly to the relevant search on each platform, where they can see live prices and complete the booking themselves.
 
-**Reasoning:** RAG excels at retrieving stable, descriptive knowledge but is a poor fit for time-sensitive, budget-critical data like flight prices. For a feature where staying within budget is the core requirement, real-time web search provides more trustworthy numbers than a vector database seeded once with general descriptions. This is a deliberate tradeoff: prioritizing data reliability over reusing every technique learned.
+### Why hotel/flight comparisons are estimates, not live prices
+`compare_hotels` and `compare_flights` use web search, which surfaces already-indexed content rather than live, personalized search results. Prices returned are realistic estimates to guide decision-making, not guaranteed fares — this limitation is stated explicitly in both tool descriptions so the agent communicates it to the user.
 
 ### Why budget totals are calculated in Python, not by the LLM
-
-Early versions let Claude estimate total costs conversationally, which led to inconsistencies (e.g., summing costs from multiple explored-but-not-chosen destinations, or minor arithmetic drift). The current design has Python calculate exact totals from structured tool outputs, then instructs Claude to reference — not recompute — these figures. This makes the budget tracking reliable regardless of the LLM's own arithmetic.
-
-### Why only one destination is counted toward the budget
-
-When `search_destinations` returns multiple options, only the cheapest is added to the running budget total — since the user will ultimately book just one. Any previously tracked destination is replaced (not accumulated) each time a new search is performed.
+Early versions let Claude estimate totals conversationally, leading to inconsistencies. The current design has Python calculate exact totals from structured tool outputs, presented as plain contextual data for Claude to reference.
 
 ## What I learned building this
 
-- Designing tool descriptions that let Claude reliably choose the right tool and ask for missing required information instead of guessing
-- The limits of pure vector similarity search on a small corpus, and how enriching the dataset improved retrieval accuracy
-- Knowing when *not* to use a technique (RAG) even after implementing it, based on the actual requirements of the feature
-- Building a multi-turn agentic loop (`while` loop with turn limits) instead of a single request/response cycle, to support tool chaining and ongoing conversations
-- Keeping numeric calculations in code rather than trusting an LLM to do arithmetic reliably, while still letting the LLM handle the natural language reasoning around those numbers
+- Designing tool descriptions that let Claude reliably choose the right tool and communicate a tool's limitations to the user
+- Preventing an agent from repeating already-rejected suggestions by explicitly tracking and excluding them in each new search
+- The importance of keeping numeric calculations in code rather than trusting an LLM with arithmetic, while letting the LLM handle the natural language reasoning
+- Framing a system note as plain contextual data rather than an imperative instruction — an overly forceful "system note" format caused Claude to treat it as suspicious rather than trustworthy
+- Writing unit tests for core business logic, independent of the LLM, to catch regressions quickly
 - Secure API key handling with `.gitignore` and environment variables, including recovering from an accidental key exposure caught by GitHub Push Protection
 
 ## Next steps
 
-- Avoid near-duplicate activity suggestions across multiple search calls within the same conversation
-- Add automated tests for core functions (`search_destinations`, `search_activities`, `check_budget`)
+- Integrate hotel/flight comparison costs into the unified budget tracker
 - Add a simple web interface as an alternative to the terminal
-- Add a `search_flights` / `search_hotels` tool for more granular cost breakdowns
+- Explore real booking API integrations (Amadeus, Booking.com partner API) for live prices
