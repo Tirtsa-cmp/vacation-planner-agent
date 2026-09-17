@@ -29,8 +29,16 @@ tools = [
             "destination ideas or wants help choosing where to go on vacation. "
             "Do not use this tool if the user already knows their destination "
             "and only needs help with flights, hotels, or activities. "
-            "Returns a short list of candidate destinations with an estimated "
-            "cost range and a brief reason why each fits the criteria."
+            "Returns a short list of 3 candidates destinations : Do not select only one destination."
+"For each destination, include:"
+"-destination name and country"
+"- why it matches the user's preferences and travel style"
+"- the atmosphere/style of the destination"
+"- suggested 3-5 activities"
+"- estimated cost per person."
+           "If the user mentions a specific destination, include it among the 3 recommendations when relevant, but still provide alternatives."
+           "Do not rank destinations or select a preferred option. "
+"The user must decide which destination to continue with."
         ),
         "input_schema": {
             "type": "object",
@@ -50,11 +58,11 @@ tools = [
                         "'beach', 'city', 'mountains', 'culture'."
                     )
                 },
-                "country_of_departure": {
+                "origin_city": {
                     "type": "string",
                     "description": (
-                        "The country from which the travelers will depart. "
-                        "Defaults to France if not specified."
+                        "The city from which the travelers will depart. "
+                        "Defaults to Paris if not specified."
                     )
                 }
             },
@@ -129,8 +137,8 @@ tools = [
     {
         "name": "compare_flights",
         "description": (
-            "Search the web for flight price estimates from a departure country to a "
-            "destination. Use this once a destination is confirmed. IMPORTANT: prices "
+            "Search the web for approximate flight price estimates from a departure city "
+            "to a destination city. Use this once a destination is confirmed. IMPORTANT: prices "
             "returned are approximate estimates based on general web search results, "
             "not real-time fares — actual prices vary by date, airline, and booking time. "
             "The user must check a flight search engine directly for accurate current prices. "
@@ -143,19 +151,20 @@ tools = [
                     "type": "string",
                     "description": "The confirmed destination city or region."
                 },
-                "country_of_departure": {
+                "origin_city": {
                     "type": "string",
-                    "description": "Departure country."
+                    "description": "Departure city."
                 },
                 "num_travelers": {
                     "type": "integer",
                     "description": "Number of travelers."
-                }
+                },
+              
             },
             "required": [
                 "destination",
                 "num_travelers",
-                "country_of_departure"
+                "origin_city"
             ]
         }
     },
@@ -164,7 +173,7 @@ tools = [
     "description": (
         "Generate search links to booking websites for a confirmed trip. "
         "Use this tool once the user has confirmed a destination and wants "
-        "to see real booking/search options. Include the departure country, "
+        "to see real booking/search options. Include the departure city, "
         "travel dates (exact or flexible), and number of travelers when available. "
         "Returns search links for flights, hotels, and activities. "
         "These are search links, not confirmed bookings."
@@ -176,9 +185,9 @@ tools = [
                 "type": "string",
                 "description": "The confirmed destination city or region."
             },
-            "country_of_departure": {
+            "origin_city": {
                 "type": "string",
-                "description": "The country where the travelers will depart from."
+                "description": "Departure city chosen by the traveler, for example Paris, Lyon, Marseille."
             },
             "travelers": {
                 "type": "integer",
@@ -209,9 +218,37 @@ tools = [
 
 
 # --- Python functions behind each tool ---
-def search_destinations(budget, num_travelers, preferences=None, country_of_departure="France", already_suggested=None):
-    """Search for vacation destinations that fit within the given budget,
-    number of travelers, and preferences."""
+def search_destinations(budget, num_travelers, preferences=None, origin_city="Paris", already_suggested=None):
+    """Search for vacation destinations based on the user's preferences, desired atmosphere, budget, number of travelers, and constraints.
+
+The goal is to help the user compare options, not to choose for them.
+
+Rules:
+- Always return exactly 3 different destination options.
+- Never select a winner or give a final recommendation.
+- Never say "my recommendation", "the best choice", "I would choose", or similar phrases.
+- End by asking the user which destination they want to select.
+
+Handling explicit destinations:
+- If the user mentions a destination as inspiration or an example (for example: "like Venice", "similar to Paris", "such as Bali"), treat it as a strong preference.
+- Always include that mentioned destination as one of the 3 options.
+- Do not remove it only because another destination is cheaper.
+- Use the other 2 options as alternatives with a similar atmosphere.
+
+Recommendation priority:
+1. Respect destinations explicitly mentioned by the user.
+2. Match the requested travel style and atmosphere.
+3. Check compatibility with the budget.
+4. Suggest budget adjustments only if necessary.
+
+For each destination provide:
+- Destination name and country
+- Why it matches the user's request
+- Atmosphere / travel style
+- 3-5 relevant activities
+- Estimated cost
+
+Do not optimize only for the cheapest destination."""
     
     budget_per_person = budget / num_travelers
     
@@ -220,7 +257,7 @@ def search_destinations(budget, num_travelers, preferences=None, country_of_depa
     
     cost_prompt = (
         f"Search the web for 3 vacation destinations suitable for "
-        f"{num_travelers} travelers departing from {country_of_departure}, "
+        f"{num_travelers} travelers departing from {origin_city}, "
         f"where the TOTAL cost per person (flight + accommodation + food for a "
         f"typical short trip) realistically fits within ${budget_per_person:.0f} per person. "
         + (f"Focus on {preferences} trips. " if preferences else "")
@@ -352,6 +389,69 @@ def check_budget(trip_items, budget_per_person):
         "within_budget": total <= budget_per_person if budget_per_person else None,
         "remaining": (budget_per_person - total) if budget_per_person else None
     }
+def compare_flights(destination, origin_city, num_travelers):
+    """
+    Search approximate flight price estimates.
+    These are estimates, not real-time booking prices.
+    """
+
+    search_prompt = (
+        f"Search the web for realistic, current flight prices per person from "
+        f"{origin_city} to {destination} for {num_travelers} travelers. "
+        f"Consider that prices vary significantly by season and demand — if this "
+        f"is around a holiday period, prices are typically higher than average. "
+        f"Give 2-3 realistic price estimates based on actual current airline "
+        f"pricing patterns, not outdated or unusually low fares. "
+        "Respond ONLY with a valid JSON array in this format: "
+        '[{"option": "Budget airline", '
+        '"price_per_person_usd": 150, '
+        '"description": "short description"}]'
+    )
+
+    sub_response = client.messages.create(
+        model="claude-sonnet-5",
+        max_tokens=1000,
+        tools=[
+            {
+                "type": "web_search_20250305",
+                "name": "web_search"
+            }
+        ],
+        messages=[
+            {
+                "role": "user",
+                "content": search_prompt
+            }
+        ]
+    )
+
+    text_parts = [
+        block.text
+        for block in sub_response.content
+        if block.type == "text"
+    ]
+
+    raw_text = "\n".join(text_parts)
+
+    cleaned = (
+        raw_text
+        .replace("```json", "")
+        .replace("```", "")
+        .strip()
+    )
+
+    match = re.search(r'\[.*\]', cleaned, re.DOTALL)
+
+    if match:
+        cleaned = match.group(0)
+
+    try:
+        flights = json.loads(cleaned)
+    except json.JSONDecodeError:
+        flights = []
+
+    return flights
+
 def compare_hotels(destination, budget_level=None):
     """Search the web for approximate hotel price comparisons at a destination.
     Returns estimates only — not real-time prices."""
@@ -379,36 +479,42 @@ def compare_hotels(destination, budget_level=None):
     except json.JSONDecodeError:
         hotels = []
     return hotels
-def compare_flights(destination, num_travelers, country_of_departure="France"):
-    """Search the web for approximate flight price comparisons.
-    Returns estimates only — not real-time fares."""
-    search_prompt = (
-        f"Search the web for approximate flight prices per person from "
-        f"{country_of_departure} to {destination} for {num_travelers} travelers. "
-        "Give 2-3 price estimates (e.g., budget airline vs. standard carrier). "
-        "Respond ONLY with a valid JSON array, no other text, in this exact format: "
-        '[{"option": "Budget airline", "price_per_person_usd": 150, "description": "short description"}]'
-    )
-    sub_response = client.messages.create(
-        model="claude-sonnet-5",
-        max_tokens=1000,
-        tools=[{"type": "web_search_20250305", "name": "web_search"}],
-        messages=[{"role": "user", "content": search_prompt}]
-    )
-    text_parts = [block.text for block in sub_response.content if block.type == "text"]
-    raw_text = "\n".join(text_parts)
-    cleaned = raw_text.replace("```json", "").replace("```", "").strip()
-    match = re.search(r'\[.*\]', cleaned, re.DOTALL)
-    if match:
-        cleaned = match.group(0)
-    try:
-        flights = json.loads(cleaned)
-    except json.JSONDecodeError:
-        flights = []
-    return flights
+{
+    "name": "compare_flights",
+    "description": (
+        "Search the web for approximate flight price estimates from a departure city "
+        "to a destination city. Use this once a destination is confirmed. IMPORTANT: "
+        "prices returned are approximate estimates based on general web search results, "
+        "not real-time fares — actual prices vary by date, airline, and booking time. "
+        "The user must check a flight search engine directly for accurate current prices. "
+        "Returns 2-3 approximate price ranges from different airlines or booking approaches."
+    ),
+    "input_schema": {
+        "type": "object",
+        "properties": {
+            "destination": {
+                "type": "string",
+                "description": "The confirmed destination city or region."
+            },
+            "origin_city": {
+                "type": "string",
+                "description": "The departure city, for example Paris."
+            },
+            "num_travelers": {
+                "type": "integer",
+                "description": "Number of travelers."
+            }
+        },
+        "required": [
+            "destination",
+            "origin_city",
+            "num_travelers"
+        ]
+    }
+},
 def generate_booking_links(
     destination,
-    country_of_departure="France",
+    origin_city="Paris",
     travelers=1,
     specific_choice=None,
     item_type=None,
@@ -420,7 +526,7 @@ def generate_booking_links(
     These are search links, not confirmed bookings."""
 
     encoded_destination = urllib.parse.quote(destination)
-    encoded_departure = urllib.parse.quote(country_of_departure)
+    encoded_departure = urllib.parse.quote(origin_city)
     dates_text = f"%20{urllib.parse.quote(travel_dates)}" if travel_dates else ""
     travelers_text = f"%20for%20{travelers}%20travelers" if travelers else ""
 
@@ -469,7 +575,34 @@ def generate_booking_links(
         )
     }
     return links
+def extract_budget_from_text(text):
+    """
+    Extract total budget and traveler count from free text.
 
+    Examples:
+    "$2000 budget for 2 travelers" -> (2000, 2)
+    "budget 700$ for 2 people" -> (700, 2)
+
+    Returns (None, None) if unclear.
+    """
+
+    # Look specifically for money amounts
+    budget_match = re.search(
+        r'(?:budget|total|around|about|of)?\s*\$?\s*(\d{3,6})\s*(?:\$|usd|dollars)?',
+        text,
+        re.IGNORECASE
+    )
+
+    travelers_match = re.search(
+        r'(\d+)\s*(?:travelers?|people|persons?|pax)',
+        text,
+        re.IGNORECASE
+    )
+
+    budget = int(budget_match.group(1)) if budget_match else None
+    travelers = int(travelers_match.group(1)) if travelers_match else None
+
+    return budget, travelers
 # --- Interactive main agent loop ---
 if __name__ == "__main__":
     print("🌴 Vacation Planner Agent — type 'quit' to exit\n")
@@ -478,15 +611,38 @@ if __name__ == "__main__":
     trip_items = []
     all_suggested_destinations = []
     budget_per_person = None
-
+    selected_destination = None
     while True:
         user_input = input("You: ").strip()
-
+        if not user_input:
+            print("Please enter a message.\n")
+            continue
         if user_input.lower() in ["quit", "exit"]:
             print("Goodbye! Have a great trip. ✈️")
             break
 
+        # Best-effort: capture budget mentioned directly by the user, even if no
+        # tool call happens to set it explicitly
+        extracted_budget, extracted_travelers = extract_budget_from_text(user_input)
+        if extracted_budget and extracted_travelers and budget_per_person is None:
+            budget_per_person = extracted_budget / extracted_travelers
+            print(
+f"[DEBUG] Extracted total budget: ${extracted_budget}, "
+f"travelers: {extracted_travelers}, "
+f"budget/person: ${budget_per_person:.0f}"
+)
+        # Detect if user selected one of the suggested destinations
+        for destination in all_suggested_destinations:
+            if destination.lower() in user_input.lower():
+                selected_destination = destination
+                print(f"[DEBUG] Selected destination: {selected_destination}")
+                break
+
         messages.append({"role": "user", "content": user_input})
+        if user_input.lower() in ["quit", "exit"]:
+            print("Goodbye! Have a great trip. ✈️")
+            break
+
 
         max_turns = 5
         turn_count = 0
@@ -500,9 +656,16 @@ if __name__ == "__main__":
     "ask the user for missing information, batch related questions together in "
     "a single message rather than asking one at a time across multiple turns. "
     "For dates, always accept flexible descriptions (e.g., 'sometime in July', "
-    "'a week around August 10th') rather than requiring exact dates — only ask "
-    "for more date precision when it's needed for a specific booking link or "
-    "accurate flight pricing."
+    "'a week around August 10th') rather than requiring exact dates.\n\n"
+    "IMPORTANT — streamlined flow: after presenting 3 destination options, as "
+    "soon as the user names their chosen destination, immediately call "
+    "compare_flights and compare_hotels for it in the same turn, THEN "
+    "IMMEDIATELY call generate_booking_links using the cheapest reasonable "
+    "flight and hotel option found — do this in the SAME response, without "
+    "waiting for the user to confirm dates or ask for links separately. If "
+    "exact dates are unknown, generate the links anyway with dates omitted or "
+    "marked as flexible — links can always be refined later. Present the final "
+    "links directly, along with a brief cost summary, in one complete answer."
 )
 
             response = client.messages.create(
@@ -533,14 +696,18 @@ if __name__ == "__main__":
 
                         if "budget" in block.input and "num_travelers" in block.input:
                             budget_per_person = block.input["budget"] / block.input["num_travelers"]
-                            add_to_trip_budget(trip_items, result, "destination")        
+                            #add_to_trip_budget(trip_items, result, "destination")        
                     elif block.name == "search_activities":
                         result = search_activities(**block.input)
                         add_to_trip_budget(trip_items, result, "activity")
                     elif block.name == "compare_hotels":
                         result = compare_hotels(**block.input)
+                        add_to_trip_budget(trip_items, result, "hotel")
+
                     elif block.name == "compare_flights":
                         result = compare_flights(**block.input)
+                        add_to_trip_budget(trip_items, result, "flight")
+
                     elif block.name == "generate_booking_links":
                         result = generate_booking_links(**block.input)
                     tool_results.append({
@@ -548,7 +715,7 @@ if __name__ == "__main__":
                         "tool_use_id": block.id,
                         "content": json.dumps(result)
                     })
-
+            print(f"[DEBUG] budget_per_person: {budget_per_person}, trip_items: {trip_items}")
             budget_status = check_budget(trip_items, budget_per_person)
 
             items_breakdown = "\n".join(
