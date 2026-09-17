@@ -162,21 +162,48 @@ tools = [
     {
     "name": "generate_booking_links",
     "description": (
-        "Generate search links to booking websites (flights, hotels, activities) "
-        "for a specific destination. Use this tool once the user has confirmed "
-        "a destination and wants to move toward actually booking the trip. Returns "
-        "links to Google Flights, Booking.com, and GetYourGuide pre-filled with the "
-        "destination, so the user can search real availability and prices themselves. "
+        "Generate search links to booking websites for a confirmed trip. "
+        "Use this tool once the user has confirmed a destination and wants "
+        "to see real booking/search options. Include the departure country, "
+        "travel dates (exact or flexible), and number of travelers when available. "
+        "Returns search links for flights, hotels, and activities. "
         "These are search links, not confirmed bookings."
     ),
     "input_schema": {
         "type": "object",
         "properties": {
-            "destination": {"type": "string", "description": "The confirmed destination city or region."},
-            "country_of_departure": {"type": "string", "description": "Departure country, for flight search context."}
+            "destination": {
+                "type": "string",
+                "description": "The confirmed destination city or region."
+            },
+            "country_of_departure": {
+                "type": "string",
+                "description": "The country where the travelers will depart from."
+            },
+            "travelers": {
+                "type": "integer",
+                "description": "Number of travelers."
+            },
+            "specific_choice": {
+                "type": "string",
+                "description": "The specific hotel name, airline, or activity name the user confirmed. Omit if generating generic search links."
+            },
+            "item_type": {
+                "type": "string",
+                "description": "Type of the specific choice: 'flight', 'hotel', or 'activity'. Required if specific_choice is given."
+            },
+            "travel_dates": {
+                "type": "string",
+                "description": (
+                    "Travel dates or date flexibility, as the user described it — e.g. "
+                    "'2026-07-10 to 2026-07-15', 'anytime in July', 'a week around August 10th, "
+                    "flexible by 2 days'. Pass the user's description as-is, do not force exact dates."
+                )
+            }
         },
         "required": ["destination"]
     }
+
 }
 ]
 
@@ -379,21 +406,70 @@ def compare_flights(destination, num_travelers, country_of_departure="France"):
     except json.JSONDecodeError:
         flights = []
     return flights
+def generate_booking_links(
+    destination,
+    country_of_departure="France",
+    travelers=1,
+    specific_choice=None,
+    item_type=None,
+    travel_dates=None
+):
+    """Generate search links for flights, hotels and activities.
+    If specific_choice and item_type are given, generates one targeted link
+    for that specific hotel/flight/activity instead of generic destination links.
+    These are search links, not confirmed bookings."""
 
-def generate_booking_links(destination, country_of_departure="France"):
-    """Generate generic search links to booking platforms for the given
-    destination. These are search URLs, not confirmed bookings."""
-    
     encoded_destination = urllib.parse.quote(destination)
     encoded_departure = urllib.parse.quote(country_of_departure)
+    dates_text = f"%20{urllib.parse.quote(travel_dates)}" if travel_dates else ""
+    travelers_text = f"%20for%20{travelers}%20travelers" if travelers else ""
 
+    if specific_choice and item_type:
+        encoded_choice = urllib.parse.quote(specific_choice)
+
+        if item_type == "hotel":
+            link = (
+                f"https://www.booking.com/searchresults.html"
+                f"?ss={encoded_choice}%20{encoded_destination}{dates_text}"
+            )
+        elif item_type == "flight":
+            link = (
+                f"https://www.google.com/travel/flights"
+                f"?q=Flights%20from%20{encoded_departure}%20to%20{encoded_destination}"
+                f"%20{encoded_choice}{travelers_text}{dates_text}"
+            )
+        elif item_type == "activity":
+            link = (
+                f"https://www.getyourguide.com/s/"
+                f"?q={encoded_choice}%20{encoded_destination}"
+            )
+        else:
+            link = f"https://www.google.com/search?q={encoded_choice}%20{encoded_destination}"
+
+        return {
+            "item_type": item_type,
+            "specific_choice": specific_choice,
+            "link": link
+        }
+
+    # Fallback: generic links for all three categories (no specific choice given)
     links = {
-        "flights": f"https://www.google.com/travel/flights?q=Flights%20from%20{encoded_departure}%20to%20{encoded_destination}",
-        "hotels": f"https://www.booking.com/searchresults.html?ss={encoded_destination}",
-        "activities": f"https://www.getyourguide.com/s/?q={encoded_destination}"
+        "flights": (
+            f"https://www.google.com/travel/flights"
+            f"?q=Flights%20from%20{encoded_departure}%20to%20{encoded_destination}"
+            f"{travelers_text}{dates_text}"
+        ),
+        "hotels": (
+            f"https://www.booking.com/searchresults.html"
+            f"?ss={encoded_destination}{dates_text}"
+        ),
+        "activities": (
+            f"https://www.getyourguide.com/s/"
+            f"?q={encoded_destination}"
+        )
     }
-
     return links
+
 # --- Interactive main agent loop ---
 if __name__ == "__main__":
     print("🌴 Vacation Planner Agent — type 'quit' to exit\n")
@@ -417,6 +493,17 @@ if __name__ == "__main__":
 
         while turn_count < max_turns:
             turn_count += 1
+            SYSTEM_PROMPT = (
+    "You are a vacation planning assistant. You can search for destination ideas "
+    "even with partial information (e.g., just a budget and vague preferences) — "
+    "don't block progress waiting for every detail. However, when you DO need to "
+    "ask the user for missing information, batch related questions together in "
+    "a single message rather than asking one at a time across multiple turns. "
+    "For dates, always accept flexible descriptions (e.g., 'sometime in July', "
+    "'a week around August 10th') rather than requiring exact dates — only ask "
+    "for more date precision when it's needed for a specific booking link or "
+    "accurate flight pricing."
+)
 
             response = client.messages.create(
                 model="claude-sonnet-5",
