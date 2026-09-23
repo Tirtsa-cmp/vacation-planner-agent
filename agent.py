@@ -620,7 +620,12 @@ SYSTEM_PROMPT = (
     "waiting for the user to confirm dates or ask for links separately. If "
     "exact dates are unknown, generate the links anyway with dates omitted or "
     "marked as flexible — links can always be refined later. Present the final "
-    "links directly, along with a brief cost summary, in one complete answer."
+    "links directly, along with a brief cost summary, in one complete answer.\n\n"
+    "IMPORTANT — activities: whenever you suggest or the user confirms specific "
+    "activities, immediately call generate_booking_links for each confirmed "
+    "activity too, in the same response — don't wait for the user to explicitly "
+    "ask for the link. Always generate links proactively as soon as something "
+    "is confirmed, whether it's a destination, flight, hotel, or activity."
 )
 if __name__ == "__main__":
     print("🌴 Vacation Planner Agent — type 'quit' to exit\n")
@@ -711,6 +716,8 @@ f"budget/person: ${budget_per_person:.0f}"
 
                     elif block.name == "generate_booking_links":
                         result = generate_booking_links(**block.input)
+                    elif item_type == "train":
+    link = f"https://www.thetrainline.com/search?search-origin={encoded_departure}&search-destination={encoded_destination}"
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,

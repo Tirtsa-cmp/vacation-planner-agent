@@ -1,3 +1,8 @@
+let sessionId = sessionStorage.getItem("vacation_session_id");
+if (!sessionId) {
+    sessionId = crypto.randomUUID();
+    sessionStorage.setItem("vacation_session_id", sessionId);
+}
 const sendButton = document.getElementById("send-button");
 console.log("CHAT.JS LOADED");
 const input = document.getElementById("user-answer");
@@ -45,7 +50,7 @@ console.log("FETCHING RESPONSE FROM SERVER...");
 
                     message: answer,
 
-                    session_id: "user1"
+                    session_id: sessionId
 
                 })
 
@@ -89,18 +94,24 @@ addMessage(
 
 
 
-
 function addMessage(text, type){
+    // Convert markdown-style links [text](url) into clickable buttons
+    const linkRegex = /\[([^\]]+)\]\((https?:\/\/[^\)]+)\)/g;
+    let formattedText = text.replace(linkRegex, (match, label, url) => {
+        return `<a href="${url}" target="_blank" class="booking-link">${label}</a>`;
+    });
 
+    // Convert remaining markdown bold **text** into <strong>
+    formattedText = formattedText.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 
-    chatBox.innerHTML +=
-    `
+    // Convert line breaks into <br>
+    formattedText = formattedText.replace(/\n/g, "<br>");
+
+    chatBox.innerHTML += `
     <div class="message ${type}">
-        ${text}
+        ${formattedText}
     </div>
     `;
 
-
     chatBox.scrollTop = chatBox.scrollHeight;
-
 }
