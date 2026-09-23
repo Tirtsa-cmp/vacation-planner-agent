@@ -549,6 +549,8 @@ def generate_booking_links(
                 f"https://www.getyourguide.com/s/"
                 f"?q={encoded_choice}%20{encoded_destination}"
             )
+        elif item_type == "train":
+            link = f"https://www.thetrainline.com/search?search-origin={encoded_departure}&search-destination={encoded_destination}"
         else:
             link = f"https://www.google.com/search?q={encoded_choice}%20{encoded_destination}"
 
@@ -716,8 +718,6 @@ f"budget/person: ${budget_per_person:.0f}"
 
                     elif block.name == "generate_booking_links":
                         result = generate_booking_links(**block.input)
-                    elif item_type == "train":
-    link = f"https://www.thetrainline.com/search?search-origin={encoded_departure}&search-destination={encoded_destination}"
                     tool_results.append({
                         "type": "tool_result",
                         "tool_use_id": block.id,
