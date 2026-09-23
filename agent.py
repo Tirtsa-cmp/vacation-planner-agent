@@ -667,15 +667,15 @@ f"budget/person: ${budget_per_person:.0f}"
 
         while turn_count < max_turns:
             turn_count += 1
-           
+                  
 
             response = client.messages.create(
-                model="claude-sonnet-5",
-                max_tokens=2000,
-                tools=tools,
-                messages=messages
-            )
-
+                    model="claude-sonnet-5",
+                    max_tokens=2000,
+                    tools=tools,
+                    messages=messages
+                )
+            
             messages.append({"role": "assistant", "content": response.content})
 
             if response.stop_reason != "tool_use":

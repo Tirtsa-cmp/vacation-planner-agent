@@ -1,23 +1,32 @@
-console.log("Hello Vaccation Planner !");
+console.log("Hello Vacation Planner!");
 
 const button = document.getElementById("plan-button");
+const responseArea = document.getElementById("agent-response");
+
 button.addEventListener("click", function() {
-    alert("Let's plan your vacation!");
 
-    const numberOfPeople = document.getElementById("number_of_people").value;
-    const budget = document.getElementById("budget").value; 
-    const numberOfDays = document.getElementById("number_of_days").value;
-    const preference = document.getElementById("preference").value;
+    const tripData = {
 
-     console.log({
-        people,
-        days,
-        preferences,
-        budget
-    });
+        people: document.getElementById("number_of_people").value,
+
+        budget: document.getElementById("budget").value,
+
+        days: document.getElementById("number_of_days").value,
+
+        preference: document.getElementById("preference").value
+
+    };
+
+
+    localStorage.setItem(
+        "tripData",
+        JSON.stringify(tripData)
+    );
+
+
+    window.location.href = "planner.html";
 
 });
-
 const navbar = document.querySelector(".navbar");
 
 

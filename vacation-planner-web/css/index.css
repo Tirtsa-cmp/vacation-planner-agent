@@ -963,4 +963,64 @@ button:hover {
 
     gap:20px;
 
+}.agent-box {
+
+    margin-top: 30px;
+
+    width: 100%;
+    max-width: 700px;
+
+    background: rgba(255,255,255,0.95);
+
+    border-radius: 20px;
+
+    padding: 25px;
+
+    box-shadow: 0 10px 30px rgba(0,0,0,0.15);
+
+    text-align: left;
+
+}
+
+
+.agent-title {
+
+    font-size: 20px;
+
+    font-weight: bold;
+
+    margin-bottom: 15px;
+
+    color: #2563eb;
+
+}
+
+
+
+
+.agent-box {
+    width: 100%;
+    max-width: 100%;
+    display: block;
+    margin-top: 30px;
+}
+
+
+
+#agent-response {
+    width: 100%;
+    min-height: 150px;
+
+    background: white;
+    border-radius: 15px;
+
+    padding: 20px;
+
+    box-sizing: border-box;
+
+    white-space: pre-wrap;
+
+    overflow-y: auto;
+
+    box-shadow: 0 10px 25px rgba(0,0,0,0.15);
 }

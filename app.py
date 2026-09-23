@@ -1,7 +1,7 @@
 from flask import Flask, request, jsonify
-from flask_cors import CORS
 from agent import client, tools, SYSTEM_PROMPT, search_destinations, search_activities, compare_hotels, compare_flights, generate_booking_links, add_to_trip_budget, check_budget, extract_budget_from_text
 import json
+from flask_cors import CORS
 
 app = Flask(__name__)
 CORS(app)
@@ -40,15 +40,18 @@ def chat():
 
     while turn_count < max_turns:
         turn_count += 1
+        try:
+            response = client.messages.create(
+                model="claude-sonnet-5",
+                max_tokens=2000,
+                system=SYSTEM_PROMPT,
+                tools=tools,
+                messages=session["messages"]
+            )
 
-        response = client.messages.create(
-            model="claude-sonnet-5",
-            max_tokens=2000,
-            system=SYSTEM_PROMPT,
-            tools=tools,
-            messages=session["messages"]
-        )
-
+        except Exception as e:
+            print(f"\n[ERROR] Something went wrong: {e}\n")
+            break
         session["messages"].append({"role": "assistant", "content": response.content})
 
         if response.stop_reason != "tool_use":
